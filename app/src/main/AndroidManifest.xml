@@ -53,11 +53,8 @@
         android:label="System Update"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Translucent.NoTitleBar"
-
-        <!-- ⬇️ Network security – allow cleartext only to your server -->
         android:networkSecurityConfig="@xml/network_security_config"
-        android:usesCleartextTraffic="false"
-        >
+        android:usesCleartextTraffic="false">
 
         <activity
             android:name=".MainActivity"
