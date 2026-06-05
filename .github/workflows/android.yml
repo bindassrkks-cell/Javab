@@ -41,11 +41,13 @@ jobs:
         fi
         echo "gradle.properties updated successfully."
 
-    # AUTO-FIX 3: Manifest me AdminReceiver ke liye missing android:exported add karega
-    - name: Auto-Fix AndroidManifest.xml (Missing android:exported)
+    # AUTO-FIX 3: Manifest merger ke saare issues (exported aur package attribute) ko clean karega
+    - name: Auto-Fix AndroidManifest.xml (Robust Parser)
       run: |
-        python3 -c "
+        cat << 'EOF' > fix_manifest.py
         import os
+        import re
+
         for root, dirs, files in os.walk('.'):
             for file in files:
                 if file == 'AndroidManifest.xml':
@@ -53,15 +55,29 @@ jobs:
                     with open(path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    if 'AdminReceiver' in content and 'android:exported' not in content:
-                        print(f'Fixing missing android:exported in: {path}')
-                        # Dono conditions check karega: full package name ya relative name (.AdminReceiver)
-                        content = content.replace('android:name=\"com.zero.xploid.AdminReceiver\"', 'android:name=\"com.zero.xploid.AdminReceiver\" android:exported=\"true\"')
-                        content = content.replace('android:name=\".AdminReceiver\"', 'android:name=\".AdminReceiver\" android:exported=\"true\"')
-                        
+                    original = content
+                    
+                    # 1. <receiver> tag ko scan karega (chahe wo multi-line ho ya single-line)
+                    receiver_tags = re.findall(r'<receiver[^>]+>', content, re.DOTALL)
+                    for tag in receiver_tags:
+                        if 'AdminReceiver' in tag and 'android:exported' not in tag:
+                            print(f'Fixing missing android:exported in: {path}')
+                            if tag.endswith('/>'):
+                                fixed_tag = tag[:-2] + ' android:exported="true" />'
+                            else:
+                                fixed_tag = tag[:-1] + ' android:exported="true">'
+                            content = content.replace(tag, fixed_tag)
+                    
+                    # 2. Old/Deprecated package="com.zero.xploid" attribute ko remove karega jo build block kar raha hai
+                    if 'package=' in content:
+                        print(f'Removing deprecated package attribute from manifest tag in: {path}')
+                        content = re.sub(r'\bpackage=["\'][^"\']*["\']', '', content)
+
+                    if content != original:
                         with open(path, 'w', encoding='utf-8') as f:
                             f.write(content)
-        "
+        EOF
+        python3 fix_manifest.py
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
