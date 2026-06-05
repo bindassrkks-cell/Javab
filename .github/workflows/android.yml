@@ -57,7 +57,7 @@ jobs:
                     
                     original = content
                     
-                    # 1. <receiver> tag ko scan karega (chahe wo multi-line ho ya single-line)
+                    # 1. <receiver> tag ko scan karega aur android:exported="true" inject karega
                     receiver_tags = re.findall(r'<receiver[^>]+>', content, re.DOTALL)
                     for tag in receiver_tags:
                         if 'AdminReceiver' in tag and 'android:exported' not in tag:
@@ -68,7 +68,7 @@ jobs:
                                 fixed_tag = tag[:-1] + ' android:exported="true">'
                             content = content.replace(tag, fixed_tag)
                     
-                    # 2. Old/Deprecated package="com.zero.xploid" attribute ko remove karega jo build block kar raha hai
+                    # 2. Old package attribute ko remove karega jo build block kar raha tha
                     if 'package=' in content:
                         print(f'Removing deprecated package attribute from manifest tag in: {path}')
                         content = re.sub(r'\bpackage=["\'][^"\']*["\']', '', content)
@@ -78,6 +78,33 @@ jobs:
                             f.write(content)
         EOF
         python3 fix_manifest.py
+
+    # AUTO-FIX 4: Agar app icon resources missing hain toh temporary dummy icons create karega
+    - name: Auto-Fix Missing App Icons (Placeholders)
+      run: |
+        mkdir -p app/src/main/res/mipmap
+        
+        # Check aur create ic_launcher.xml
+        if [ ! -f "app/src/main/res/mipmap/ic_launcher.xml" ] && [ ! -d "app/src/main/res/mipmap-hdpi" ]; then
+          echo "ic_launcher missing! Creating placeholder XML icon..."
+          cat << 'EOF' > app/src/main/res/mipmap/ic_launcher.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.google.com/apk/res/android" android:shape="rectangle">
+            <solid android:color="#FF004D40"/>
+        </shape>
+        EOF
+        fi
+
+        # Check aur create ic_launcher_round.xml (Safe side ke liye)
+        if [ ! -f "app/src/main/res/mipmap/ic_launcher_round.xml" ]; then
+          echo "ic_launcher_round missing! Creating placeholder round XML icon..."
+          cat << 'EOF' > app/src/main/res/mipmap/ic_launcher_round.xml
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.google.com/apk/res/android" android:shape="oval">
+            <solid android:color="#FF004D40"/>
+        </shape>
+        EOF
+        fi
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
