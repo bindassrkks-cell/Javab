@@ -10,6 +10,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    # AUTO-FIX 7: GitHub Release create karne ke liye Write Permission allow karega
+    permissions:
+      contents: write
 
     steps:
     - uses: actions/checkout@v4
@@ -136,14 +140,12 @@ jobs:
     # AUTO-FIX 6: Java file ki galat spelling aur Manifest reference ko auto-correct karega
     - name: Auto-Fix Java Filename Typo (BootReciever -> BootReceiver)
       run: |
-        # 1. Java file ka naam rename karega agar galat spelling mili
         find . -name "BootReciever.java" | while read file; do
           dir=$(dirname "$file")
           echo "Fixing Java filename: Renaming $file to $dir/BootReceiver.java"
           mv "$file" "$dir/BootReceiver.java"
         done
 
-        # 2. Manifest me agar galat reference (BootReciever) bacha ho toh use update karega
         find . -name "AndroidManifest.xml" | while read manifest; do
           if grep -q "BootReciever" "$manifest"; then
             echo "Fixing typos in Manifest: Changing BootReciever to BootReceiver in $manifest"
