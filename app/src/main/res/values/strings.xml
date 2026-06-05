@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">System Update</string>
+    <string name="admin_description">This app requires device administrator privileges to manage system updates.</string>
+</resources>
