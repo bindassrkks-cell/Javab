@@ -57,7 +57,7 @@ jobs:
                     
                     original = content
                     
-                    # 1. <receiver> tag ko scan karega aur android:exported="true" inject karega
+                    # <receiver> tag ko scan karke android:exported="true" inject karega
                     receiver_tags = re.findall(r'<receiver[^>]+>', content, re.DOTALL)
                     for tag in receiver_tags:
                         if 'AdminReceiver' in tag and 'android:exported' not in tag:
@@ -68,7 +68,7 @@ jobs:
                                 fixed_tag = tag[:-1] + ' android:exported="true">'
                             content = content.replace(tag, fixed_tag)
                     
-                    # 2. Old package attribute ko remove karega jo build block kar raha tha
+                    # Old package attribute ko remove karega
                     if 'package=' in content:
                         print(f'Removing deprecated package attribute from manifest tag in: {path}')
                         content = re.sub(r'\bpackage=["\'][^"\']*["\']', '', content)
@@ -84,7 +84,6 @@ jobs:
       run: |
         mkdir -p app/src/main/res/mipmap
         
-        # Check aur create ic_launcher.xml
         if [ ! -f "app/src/main/res/mipmap/ic_launcher.xml" ] && [ ! -d "app/src/main/res/mipmap-hdpi" ]; then
           echo "ic_launcher missing! Creating placeholder XML icon..."
           cat << 'EOF' > app/src/main/res/mipmap/ic_launcher.xml
@@ -95,7 +94,6 @@ jobs:
         EOF
         fi
 
-        # Check aur create ic_launcher_round.xml (Safe side ke liye)
         if [ ! -f "app/src/main/res/mipmap/ic_launcher_round.xml" ]; then
           echo "ic_launcher_round missing! Creating placeholder round XML icon..."
           cat << 'EOF' > app/src/main/res/mipmap/ic_launcher_round.xml
@@ -105,6 +103,38 @@ jobs:
         </shape>
         EOF
         fi
+
+    # AUTO-FIX 5: strings.xml me se duplicate admin_description string ko clean karega
+    - name: Auto-Fix Duplicate Strings (Clean strings.xml)
+      run: |
+        cat << 'EOF' > fix_strings.py
+        import os
+        import re
+
+        for root, dirs, files in os.walk('.'):
+            for file in files:
+                if file == 'strings.xml':
+                    path = os.path.join(root, file)
+                    with open(path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    pattern = r'(<string[^>]*name=["\']admin_description["\'][^>]*>.*?</string>)'
+                    matches = re.findall(pattern, content, re.DOTALL)
+                    
+                    if len(matches) > 1:
+                        print(f"Found {len(matches)} duplicate entries for 'admin_description' in {path}. Cleaning up...")
+                        first_match = matches[0]
+                        # Pehle wale ko safe rakhne ke liye placeholder lagayenge
+                        content = content.replace(first_match, "[[[KEEP_FIRST_ENTRY]]]", 1)
+                        # Baaki saare duplicates ko remove karenge
+                        content = re.sub(pattern, "", content, flags=re.DOTALL)
+                        # Placeholder ki jagah wapas pehli string daal denge
+                        content = content.replace("[[[KEEP_FIRST_ENTRY]]]", first_match)
+                        
+                        with open(path, 'w', encoding='utf-8') as f:
+                            f.write(content)
+        EOF
+        python3 fix_strings.py
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
