@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext traffic only to your server -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">javabss.whf.bz</domain>
+    </domain-config>
+</network-security-config>
