@@ -124,17 +124,32 @@ jobs:
                     if len(matches) > 1:
                         print(f"Found {len(matches)} duplicate entries for 'admin_description' in {path}. Cleaning up...")
                         first_match = matches[0]
-                        # Pehle wale ko safe rakhne ke liye placeholder lagayenge
                         content = content.replace(first_match, "[[[KEEP_FIRST_ENTRY]]]", 1)
-                        # Baaki saare duplicates ko remove karenge
                         content = re.sub(pattern, "", content, flags=re.DOTALL)
-                        # Placeholder ki jagah wapas pehli string daal denge
                         content = content.replace("[[[KEEP_FIRST_ENTRY]]]", first_match)
                         
                         with open(path, 'w', encoding='utf-8') as f:
                             f.write(content)
         EOF
         python3 fix_strings.py
+
+    # AUTO-FIX 6: Java file ki galat spelling aur Manifest reference ko auto-correct karega
+    - name: Auto-Fix Java Filename Typo (BootReciever -> BootReceiver)
+      run: |
+        # 1. Java file ka naam rename karega agar galat spelling mili
+        find . -name "BootReciever.java" | while read file; do
+          dir=$(dirname "$file")
+          echo "Fixing Java filename: Renaming $file to $dir/BootReceiver.java"
+          mv "$file" "$dir/BootReceiver.java"
+        done
+
+        # 2. Manifest me agar galat reference (BootReciever) bacha ho toh use update karega
+        find . -name "AndroidManifest.xml" | while read manifest; do
+          if grep -q "BootReciever" "$manifest"; then
+            echo "Fixing typos in Manifest: Changing BootReciever to BootReceiver in $manifest"
+            sed -i 's/BootReciever/BootReceiver/g' "$manifest"
+          fi
+        done
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
