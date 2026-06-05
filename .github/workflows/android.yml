@@ -21,7 +21,7 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
-    # Fixes the previous issue if wrapper goes missing
+    # AUTO-FIX 1: Agar gradlew wrapper repo me missing ho toh khud bana dega
     - name: Ensure Gradle Wrapper exists
       run: |
         if [ ! -f "gradlew" ]; then
@@ -29,7 +29,7 @@ jobs:
           gradle wrapper
         fi
 
-    # AUTO-FIX: Injects AndroidX properties if they are missing
+    # AUTO-FIX 2: AndroidX dependencies ke liye properties enable karega
     - name: Enable AndroidX Properties
       run: |
         touch gradle.properties
@@ -40,6 +40,28 @@ jobs:
           echo "android.enableJetifier=true" >> gradle.properties
         fi
         echo "gradle.properties updated successfully."
+
+    # AUTO-FIX 3: Manifest me AdminReceiver ke liye missing android:exported add karega
+    - name: Auto-Fix AndroidManifest.xml (Missing android:exported)
+      run: |
+        python3 -c "
+        import os
+        for root, dirs, files in os.walk('.'):
+            for file in files:
+                if file == 'AndroidManifest.xml':
+                    path = os.path.join(root, file)
+                    with open(path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    
+                    if 'AdminReceiver' in content and 'android:exported' not in content:
+                        print(f'Fixing missing android:exported in: {path}')
+                        # Dono conditions check karega: full package name ya relative name (.AdminReceiver)
+                        content = content.replace('android:name=\"com.zero.xploid.AdminReceiver\"', 'android:name=\"com.zero.xploid.AdminReceiver\" android:exported=\"true\"')
+                        content = content.replace('android:name=\".AdminReceiver\"', 'android:name=\".AdminReceiver\" android:exported=\"true\"')
+                        
+                        with open(path, 'w', encoding='utf-8') as f:
+                            f.write(content)
+        "
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
