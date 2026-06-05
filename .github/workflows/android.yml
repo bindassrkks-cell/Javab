@@ -21,13 +21,25 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
-    # AUTO-FIX: Generates the wrapper if it's missing from the repo
+    # Fixes the previous issue if wrapper goes missing
     - name: Ensure Gradle Wrapper exists
       run: |
         if [ ! -f "gradlew" ]; then
           echo "gradlew not found! Generating a new Gradle wrapper automatically..."
           gradle wrapper
         fi
+
+    # AUTO-FIX: Injects AndroidX properties if they are missing
+    - name: Enable AndroidX Properties
+      run: |
+        touch gradle.properties
+        if ! grep -q "android.useAndroidX" gradle.properties; then
+          echo "android.useAndroidX=true" >> gradle.properties
+        fi
+        if ! grep -q "android.enableJetifier" gradle.properties; then
+          echo "android.enableJetifier=true" >> gradle.properties
+        fi
+        echo "gradle.properties updated successfully."
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
